@@ -178,7 +178,7 @@ public sealed class KoreanLocalizationMod : ProjectArrhythmiaModBehaviour, ITabl
         if (!IsKorean)
         {
             foreach (var item in originalText)
-                if (item.Key != null && data.ui.TryGetValue(item.Value, out var translated) && item.Key.text == translated)
+                if (item.Key != null && item.Key.text == TranslateDisplayText(item.Key, item.Value))
                     item.Key.text = item.Value;
             originalText.Clear();
             return;
@@ -190,11 +190,14 @@ public sealed class KoreanLocalizationMod : ProjectArrhythmiaModBehaviour, ITabl
 
     private string TranslateUi(Component component, string value)
     {
-        if (component == null || string.IsNullOrEmpty(value) || !data.ui.TryGetValue(value, out var translated))
+        if (component == null || string.IsNullOrEmpty(value))
+            return value;
+        string translated = TranslateDisplayText(component, value);
+        if (translated == value)
             return value;
         if (!uiComponents.TryGetValue(component, out var allowed))
         {
-            allowed = component.GetComponentInParent<TMP_InputField>() == null && component.GetComponentInParent<InputField>() == null;
+            allowed = component.GetComponentInParent<TMP_InputField>(true) == null && component.GetComponentInParent<InputField>(true) == null;
             var parts = new List<string>();
             for (Transform node = component.transform; node != null; node = node.parent)
                 parts.Add(node.name.Replace("(Clone)", ""));
@@ -208,6 +211,43 @@ public sealed class KoreanLocalizationMod : ProjectArrhythmiaModBehaviour, ITabl
         if (component is TMP_Text tmp)
             originalText[tmp] = value;
         return translated;
+    }
+
+    private string TranslateDisplayText(Component component, string value)
+    {
+        if (data.ui.TryGetValue(value, out var translated))
+            return translated;
+        // Match only authored UI envelopes; names, search terms and timestamps stay untouched.
+        if (component.GetComponentInParent<Tooltip>(true) != null)
+        {
+            const string themePrefix = "Select ";
+            const string themeSuffix = " Theme";
+            const string descriptionSuffix = " ]\nSelect this theme for the theme keyframe";
+            if (value.Length >= themePrefix.Length + themeSuffix.Length &&
+                value.StartsWith(themePrefix, StringComparison.Ordinal) && value.EndsWith(themeSuffix, StringComparison.Ordinal))
+                return data.ui[themePrefix] + value.Substring(themePrefix.Length, value.Length - themePrefix.Length - themeSuffix.Length) + data.ui[themeSuffix];
+            if (value.EndsWith(descriptionSuffix, StringComparison.Ordinal))
+                return value.Substring(0, value.Length - descriptionSuffix.Length) + data.ui[descriptionSuffix];
+        }
+        if (component.GetComponentInParent<QuickActionCellView>(true) != null)
+        {
+            int lineBreak = value.IndexOf('\n');
+            string title = lineBreak < 0 ? value : value.Substring(0, lineBreak);
+            string details = lineBreak < 0 ? string.Empty : value.Substring(lineBreak);
+            if (data.ui.TryGetValue(title, out translated))
+                return translated + details;
+            const string containsPrefix = "Select objects containing \"";
+            if (title.StartsWith(containsPrefix, StringComparison.Ordinal) && title.EndsWith("\"", StringComparison.Ordinal))
+                return data.ui[containsPrefix] + title.Substring(containsPrefix.Length) + details;
+            if (title.Length >= 17 && title.StartsWith("Select \"", StringComparison.Ordinal) && title.EndsWith("\" objects", StringComparison.Ordinal))
+                return data.ui["Select \""] + title.Substring(8, title.Length - 8 - 9) + data.ui["\" objects"] + details;
+            foreach (string suffix in new[] { " objects", " shapes" })
+                if (title.Length >= 7 + suffix.Length && title.StartsWith("Select ", StringComparison.Ordinal) && title.EndsWith(suffix, StringComparison.Ordinal))
+                    return data.ui["Select "] + title.Substring(7, title.Length - 7 - suffix.Length) + data.ui[suffix] + details;
+            if (title.StartsWith("Jump to ", StringComparison.Ordinal))
+                return data.ui["Jump to "] + title.Substring(8) + details;
+        }
+        return value;
     }
 
     private TextAsset TranslateAsset(TextAsset original)
