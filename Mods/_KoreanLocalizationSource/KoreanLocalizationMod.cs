@@ -3,6 +3,8 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
+using System.Reflection.Emit;
 using HarmonyLib;
 using Newtonsoft.Json;
 using ProjectArrhythmia.Modding;
@@ -37,6 +39,8 @@ public sealed class KoreanLocalizationMod : ProjectArrhythmiaModBehaviour, ITabl
     private readonly Dictionary<string, TextAsset> assets = new Dictionary<string, TextAsset>();
     private readonly Dictionary<Component, bool> uiComponents = new Dictionary<Component, bool>();
     private readonly Dictionary<TMP_Text, string> originalText = new Dictionary<TMP_Text, string>();
+    private TMP_FontAsset koreanFont;
+    private TMP_FontAsset addedKoreanFallback;
     private string languagePath;
     private bool ready;
 
@@ -117,6 +121,18 @@ public sealed class KoreanLocalizationMod : ProjectArrhythmiaModBehaviour, ITabl
         yield return fontRequest;
         if (fontRequest.asset == null)
             throw new InvalidDataException("The game's Korean font is missing.");
+
+        // The Korean atlas has complete syllables but lacks standalone consonants such as ㅋ and ㅎ.
+        koreanFont = (TMP_FontAsset)fontRequest.asset;
+        var sourceFont = Resources.Load<TMP_FontAsset>("Fonts & Materials/PoorStory");
+        if (sourceFont == null || sourceFont.sourceFontFile == null)
+            throw new InvalidDataException("The game's supplemental Korean font is missing.");
+        addedKoreanFallback = TMP_FontAsset.CreateFontAsset(sourceFont.sourceFontFile);
+        addedKoreanFallback.name = "Korean Jamo Fallback";
+        addedKoreanFallback.hideFlags = HideFlags.DontUnloadUnusedAsset;
+        if (koreanFont.fallbackFontAssetTable == null)
+            koreanFont.fallbackFontAssetTable = new List<TMP_FontAsset>();
+        koreanFont.fallbackFontAssetTable.Add(addedKoreanFallback);
 
         ready = true;
         LocalizationSettings.SelectedLocaleChanged += OnLocaleChanged;
@@ -206,9 +222,30 @@ public sealed class KoreanLocalizationMod : ProjectArrhythmiaModBehaviour, ITabl
         return asset;
     }
 
+    private static string TranslateLiteral(string source)
+    {
+        return IsKorean && instance.data.ui.TryGetValue(source, out var translated) ? translated : source;
+    }
+
+    private static string FormatStopMotionSubtitle(string format, object[] arguments)
+    {
+        string translated = TranslateLiteral(format);
+        if (translated != format)
+            arguments[1] = string.Empty; // Korean frame counts do not use the English plural suffix.
+        return string.Format(translated, arguments);
+    }
+
     protected override void OnShutdown()
     {
         LocalizationSettings.SelectedLocaleChanged -= OnLocaleChanged;
+        if (koreanFont != null && addedKoreanFallback != null)
+        {
+            koreanFont.fallbackFontAssetTable.Remove(addedKoreanFallback);
+            foreach (var texture in addedKoreanFallback.atlasTextures)
+                Destroy(texture);
+            Destroy(addedKoreanFallback.material);
+            Destroy(addedKoreanFallback);
+        }
         if (ReferenceEquals(LocalizationSettings.StringDatabase.TableProvider, this))
             LocalizationSettings.StringDatabase.TableProvider = previousProvider;
         if (ReferenceEquals(LocalizationSettings.StringDatabase.TablePostprocessor, this))
@@ -304,6 +341,41 @@ public sealed class KoreanLocalizationMod : ProjectArrhythmiaModBehaviour, ITabl
                 return false;
             }
             return true;
+        }
+    }
+
+    [HarmonyPatch(typeof(DebugController), "OnGUI")]
+    private static class CommandSearchPatch
+    {
+        private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+        {
+            foreach (var instruction in instructions)
+            {
+                yield return instruction;
+                if (instruction.opcode == OpCodes.Ldstr && (string)instruction.operand == "No command matches [")
+                    yield return new CodeInstruction(OpCodes.Call, AccessTools.Method(typeof(KoreanLocalizationMod), nameof(TranslateLiteral)));
+            }
+        }
+    }
+
+    [HarmonyPatch]
+    private static class StopMotionSubtitlePatch
+    {
+        private static MethodBase TargetMethod()
+        {
+            return AccessTools.Method(AccessTools.TypeByName("StopMotionQuickActionModule"), "AddExecutionSuggestion");
+        }
+
+        private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+        {
+            var original = AccessTools.Method(typeof(string), nameof(string.Format), new[] { typeof(string), typeof(object[]) });
+            var replacement = AccessTools.Method(typeof(KoreanLocalizationMod), nameof(FormatStopMotionSubtitle));
+            foreach (var instruction in instructions)
+            {
+                if (instruction.Calls(original))
+                    instruction.operand = replacement;
+                yield return instruction;
+            }
         }
     }
 }
