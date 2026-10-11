@@ -16,6 +16,8 @@ using UnityEngine.Localization.Metadata;
 using UnityEngine.Localization.Settings;
 using UnityEngine.Localization.Tables;
 using UnityEngine.ResourceManagement.AsyncOperations;
+using UnityEngine.TextCore;
+using UnityEngine.TextCore.LowLevel;
 using UnityEngine.UI;
 using VGFunctions;
 
@@ -41,6 +43,7 @@ public sealed class KoreanLocalizationMod : ProjectArrhythmiaModBehaviour, ITabl
     private readonly Dictionary<TMP_Text, string> originalText = new Dictionary<TMP_Text, string>();
     private TMP_FontAsset koreanFont;
     private TMP_FontAsset addedKoreanFallback;
+    private TMP_FontAsset addedSymbolFallback;
     private string languagePath;
     private bool ready;
 
@@ -134,6 +137,10 @@ public sealed class KoreanLocalizationMod : ProjectArrhythmiaModBehaviour, ITabl
             koreanFont.fallbackFontAssetTable = new List<TMP_FontAsset>();
         koreanFont.fallbackFontAssetTable.Add(addedKoreanFallback);
 
+        addedSymbolFallback = CreateSymbolFallback(sourceFont.sourceFontFile);
+        if (addedSymbolFallback != null)
+            koreanFont.fallbackFontAssetTable.Add(addedSymbolFallback);
+
         ready = true;
         LocalizationSettings.SelectedLocaleChanged += OnLocaleChanged;
         var settings = SingletonBase<SettingsManager>.Inst;
@@ -145,6 +152,55 @@ public sealed class KoreanLocalizationMod : ProjectArrhythmiaModBehaviour, ITabl
         settings.UpdateSettingsFile();
         Context.Log("Ready: " + data.tables.Values.Sum(table => table.Count) + " table entries, " +
                     data.assets.Count + " story/document assets, " + data.ui.Count + " UI translations.");
+    }
+
+    private TMP_FontAsset CreateSymbolFallback(Font templateFont)
+    {
+        // Unity's built-in Arial omits font data. Read this one symbol from Windows instead.
+        TMP_FontAsset font = null;
+        try
+        {
+            string fontPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Fonts), "arial.ttf");
+            if (!File.Exists(fontPath))
+                throw new FileNotFoundException("Windows Arial font is missing.", fontPath);
+            font = TMP_FontAsset.CreateFontAsset(templateFont, 90, 9, GlyphRenderMode.SDFAA,
+                256, 256, AtlasPopulationMode.Static, false);
+            if (FontEngine.LoadFontFace(fontPath, 90) != FontEngineError.Success ||
+                !FontEngine.TryGetGlyphIndex('∑', out uint glyphIndex))
+                throw new InvalidDataException("The summation glyph could not be loaded.");
+            font.faceInfo = FontEngine.GetFaceInfo();
+            var atlas = font.atlasTextures[0];
+            atlas.Resize(256, 256);
+            atlas.LoadRawTextureData(new byte[256 * 256]);
+            atlas.Apply(false, false);
+
+            // This Unity version exposes glyph loading publicly, but atlas rendering is internal.
+            var renderGlyph = typeof(FontEngine).GetMethod("TryAddGlyphToTexture", BindingFlags.Static | BindingFlags.NonPublic);
+            object[] arguments = { glyphIndex, 9, GlyphPackingMode.BestShortSideFit,
+                new List<GlyphRect> { new GlyphRect(0, 0, 255, 255) }, new List<GlyphRect>(),
+                GlyphRenderMode.SDFAA, atlas, null };
+            if (renderGlyph == null || !(bool)renderGlyph.Invoke(null, arguments))
+                throw new InvalidDataException("The summation glyph could not be rendered.");
+            var glyph = (Glyph)arguments[7];
+            font.glyphTable.Add(glyph);
+            font.characterTable.Add(new TMP_Character('∑', font, glyph));
+            font.ReadFontAssetDefinition();
+            font.name = "Korean Glitch Symbol Fallback";
+            font.hideFlags = HideFlags.DontUnloadUnusedAsset;
+            return font;
+        }
+        catch (Exception error)
+        {
+            Context.Log("Symbol fallback unavailable: " + error.Message);
+            if (font != null)
+            {
+                foreach (var texture in font.atlasTextures)
+                    Destroy(texture);
+                Destroy(font.material);
+                Destroy(font);
+            }
+            return null;
+        }
     }
 
     public AsyncOperationHandle<TTable> ProvideTableAsync<TTable>(string tableCollectionName, Locale locale)
@@ -278,13 +334,16 @@ public sealed class KoreanLocalizationMod : ProjectArrhythmiaModBehaviour, ITabl
     protected override void OnShutdown()
     {
         LocalizationSettings.SelectedLocaleChanged -= OnLocaleChanged;
-        if (koreanFont != null && addedKoreanFallback != null)
+        foreach (var fallback in new[] { addedKoreanFallback, addedSymbolFallback })
         {
-            koreanFont.fallbackFontAssetTable.Remove(addedKoreanFallback);
-            foreach (var texture in addedKoreanFallback.atlasTextures)
+            if (fallback == null)
+                continue;
+            if (koreanFont != null)
+                koreanFont.fallbackFontAssetTable.Remove(fallback);
+            foreach (var texture in fallback.atlasTextures)
                 Destroy(texture);
-            Destroy(addedKoreanFallback.material);
-            Destroy(addedKoreanFallback);
+            Destroy(fallback.material);
+            Destroy(fallback);
         }
         if (ReferenceEquals(LocalizationSettings.StringDatabase.TableProvider, this))
             LocalizationSettings.StringDatabase.TableProvider = previousProvider;
