@@ -10,7 +10,7 @@ $arguments = @($compiler, '/nologo', '/target:library', '/nostdlib+', '/optimize
     ('/out:' + (Join-Path $output 'KoreanLocalization.Mod.dll')))
 $references = @('mscorlib', 'System', 'System.Core', 'netstandard', 'Assembly-CSharp', 'Assembly-CSharp-firstpass',
     '0Harmony', 'Newtonsoft.Json', 'UnityEngine', 'UnityEngine.CoreModule', 'UnityEngine.UI',
-    'UnityEngine.TextRenderingModule', 'UnityEngine.AssetBundleModule', 'Unity.TextMeshPro',
+    'UnityEngine.TextRenderingModule', 'UnityEngine.TextCoreFontEngineModule', 'UnityEngine.AssetBundleModule', 'Unity.TextMeshPro',
     'Unity.Localization', 'Unity.Addressables', 'Unity.ResourceManager')
 foreach ($reference in $references) { $arguments += '/reference:' + (Join-Path $managed ($reference + '.dll')) }
 $arguments += Join-Path $PSScriptRoot 'KoreanLocalizationMod.cs'
