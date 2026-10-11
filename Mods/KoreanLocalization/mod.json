@@ -1,7 +1,7 @@
 {
   "id": "afterbeat.korean.localization",
   "name": "Afterbeat 한국어",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": "Korean localization with GPT 6 Luna",
   "description": "한국어 UI, 스토리 대사, 기록 및 뉴스 번역",
   "entryAssembly": "KoreanLocalization.Mod.dll",
